@@ -15,7 +15,7 @@ DOES NOT WORK
 Clone the repository and set up Python virtual environment:
 
 ``` sh
-git clone https://github.com/JosefAlbers/whisper-turbo-mlx.git
+git clone https://github.com/bzzzbzzzzz/whisper-turbo-mlx.git
 cd whisper-turbo-mlx
 script/setup
 ```
