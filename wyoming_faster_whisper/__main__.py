@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import json
 import logging
 import platform
-import re
 from functools import partial
 
-import faster_whisper
+from huggingface_hub import snapshot_download
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
 from . import __version__
-from .handler import FasterWhisperEventHandler
+from .handler import WhisperTurboEventHandler
+from .whisper_turbo import Transcriber
 
 _LOGGER = logging.getLogger(__name__)
-
 
 async def main() -> None:
     """Main entry point."""
@@ -22,7 +22,7 @@ async def main() -> None:
     parser.add_argument(
         "--model",
         required=True,
-        help="Name of faster-whisper model to use (or auto)",
+        help="Name of whisper model to use (or auto)",
     )
     parser.add_argument("--uri", required=True, help="unix:// or tcp://")
     parser.add_argument(
@@ -36,30 +36,18 @@ async def main() -> None:
         help="Directory to download models into (default: first data dir)",
     )
     parser.add_argument(
-        "--device",
-        default="cpu",
-        help="Device to use for inference (default: cpu)",
-    )
-    parser.add_argument(
         "--language",
         help="Default language to set for transcription",
     )
     parser.add_argument(
-        "--compute-type",
-        default="default",
-        help="Compute type (float16, int8, etc.)",
-    )
-    parser.add_argument(
-        "--beam-size",
-        type=int,
-        default=5,
-        help="Size of beam during decoding (0 for auto)",
+        "--quick",
+        action="store_true",
+        help="Use quick transcription mode",
     )
     parser.add_argument(
         "--initial-prompt",
         help="Optional text to provide as a prompt for the first window",
     )
-    #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     parser.add_argument(
         "--log-format", default=logging.BASIC_FORMAT, help="Format for log messages"
@@ -85,61 +73,54 @@ async def main() -> None:
     machine = platform.machine().lower()
     is_arm = ("arm" in machine) or ("aarch" in machine)
     if args.model == "auto":
-        args.model = "tiny-int8" if is_arm else "base-int8"
+        args.model = "tiny" if is_arm else "base"
         _LOGGER.debug("Model automatically selected: %s", args.model)
 
-    if args.beam_size <= 0:
-        args.beam_size = 1 if is_arm else 5
-        _LOGGER.debug("Beam size automatically selected: %s", args.beam_size)
+    # Load model configuration
+    path_hf = snapshot_download(
+        repo_id='openai/whisper-large-v3-turbo',
+        allow_patterns=["config.json", "model.safetensors"],
+        cache_dir=args.download_dir
+    )
+    
+    with open(f'{path_hf}/config.json', 'r') as fp:
+        cfg = json.load(fp)
 
-    # Resolve model name
-    model_name = args.model
-    match = re.match(r"^(tiny|base|small|medium)[.-]int8$", args.model)
-    if match:
-        # Original models re-uploaded to huggingface
-        model_size = match.group(1)
-        model_name = f"{model_size}-int8"
-        args.model = f"rhasspy/faster-whisper-{model_name}"
-
-    if args.language == "auto":
-        # Whisper does not understand "auto"
-        args.language = None
+    # Initialize model
+    _LOGGER.debug("Loading Whisper Turbo MLX model")
+    model = Transcriber(cfg)
+    weights = [(k.replace("embed_positions.weight", "positional_embedding"), 
+                v.swapaxes(1, 2) if ('conv' in k and v.ndim==3) else v) 
+              for k, v in mx.load(f'{path_hf}/model.safetensors').items()]
+    model.load_weights(weights, strict=False)
+    model.eval()
 
     wyoming_info = Info(
         asr=[
             AsrProgram(
-                name="faster-whisper",
-                description="Faster Whisper transcription with CTranslate2",
+                name="whisper-turbo-mlx",
+                description="Whisper Turbo implementation using MLX",
                 attribution=Attribution(
-                    name="Guillaume Klein",
-                    url="https://github.com/guillaumekln/faster-whisper/",
+                    name="Josef Albers",
+                    url="https://github.com/JosefAlbers/whisper-turbo-mlx",
                 ),
                 installed=True,
                 version=__version__,
                 models=[
                     AsrModel(
-                        name=model_name,
-                        description=model_name,
+                        name=args.model,
+                        description=f"Whisper Turbo {args.model} model",
                         attribution=Attribution(
-                            name="Systran",
-                            url="https://huggingface.co/Systran",
+                            name="OpenAI",
+                            url="https://github.com/openai/whisper",
                         ),
                         installed=True,
-                        languages=faster_whisper.tokenizer._LANGUAGE_CODES,  # pylint: disable=protected-access
-                        version=faster_whisper.__version__,
+                        languages=["auto", "en"],  # Update with full language list
+                        version="3.0",
                     )
                 ],
             )
         ],
-    )
-
-    # Load model
-    _LOGGER.debug("Loading %s", args.model)
-    whisper_model = faster_whisper.WhisperModel(
-        args.model,
-        download_root=args.download_dir,
-        device=args.device,
-        compute_type=args.compute_type,
     )
 
     server = AsyncServer.from_uri(args.uri)
@@ -147,22 +128,17 @@ async def main() -> None:
     model_lock = asyncio.Lock()
     await server.run(
         partial(
-            FasterWhisperEventHandler,
+            WhisperTurboEventHandler,
             wyoming_info,
             args,
-            whisper_model,
+            model,
             model_lock,
             initial_prompt=args.initial_prompt,
         )
     )
 
-
-# -----------------------------------------------------------------------------
-
-
 def run() -> None:
     asyncio.run(main())
-
 
 if __name__ == "__main__":
     try:
