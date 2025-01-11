@@ -5,26 +5,28 @@ import logging
 import os
 import tempfile
 import wave
-from typing import Optional
+from typing import Optional, Tuple
 
-import faster_whisper
+import mlx.core as mx
+import numpy as np
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStop
 from wyoming.event import Event
 from wyoming.info import Describe, Info
 from wyoming.server import AsyncEventHandler
 
+from .whisper_turbo import Transcriber, log_mel_spectrogram
+
 _LOGGER = logging.getLogger(__name__)
 
-
-class FasterWhisperEventHandler(AsyncEventHandler):
+class WhisperTurboEventHandler(AsyncEventHandler):
     """Event handler for clients."""
 
     def __init__(
         self,
         wyoming_info: Info,
         cli_args: argparse.Namespace,
-        model: faster_whisper.WhisperModel,
+        model: Transcriber,
         model_lock: asyncio.Lock,
         *args,
         initial_prompt: Optional[str] = None,
@@ -56,26 +58,20 @@ class FasterWhisperEventHandler(AsyncEventHandler):
             return True
 
         if AudioStop.is_type(event.type):
-            _LOGGER.debug(
-                "Audio stopped. Transcribing with initial prompt=%s",
-                self.initial_prompt,
-            )
+            _LOGGER.debug("Audio stopped. Transcribing with initial prompt=%s", self.initial_prompt)
             assert self._wav_file is not None
 
             self._wav_file.close()
             self._wav_file = None
 
             async with self.model_lock:
-                segments, _info = self.model.transcribe(
-                    self._wav_path,
-                    beam_size=self.cli_args.beam_size,
-                    language=self._language,
-                    initial_prompt=self.initial_prompt,
+                text = self.model(
+                    path_audio=self._wav_path,
+                    any_lang=self._language == "auto",
+                    quick=self.cli_args.quick
                 )
 
-            text = " ".join(segment.text for segment in segments)
             _LOGGER.info(text)
-
             await self.write_event(Transcript(text=text).event())
             _LOGGER.debug("Completed request")
 
