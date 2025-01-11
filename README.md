@@ -1,6 +1,8 @@
-# Wyoming Faster Whisper
+DOES NOT WORK
 
-[Wyoming protocol](https://github.com/rhasspy/wyoming) server for the [faster-whisper](https://github.com/guillaumekln/faster-whisper/) speech to text system.
+# Wyoming Whisper Turbo MLX
+
+[Wyoming protocol](https://github.com/rhasspy/wyoming) server for the [whisper-turbo-mlx](https://github.com/JosefAlbers/whisper-turbo-mlx) speech to text system.
 
 ## Home Assistant Add-on
 
@@ -13,8 +15,8 @@
 Clone the repository and set up Python virtual environment:
 
 ``` sh
-git clone https://github.com/rhasspy/wyoming-faster-whisper.git
-cd wyoming-faster-whisper
+git clone https://github.com/JosefAlbers/whisper-turbo-mlx.git
+cd whisper-turbo-mlx
 script/setup
 ```
 
