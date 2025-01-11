@@ -1,5 +1,5 @@
 wyoming==1.5.3
-mlx==0.18.1
+mlx>=0.18.1
 numpy==2.0.2
 tiktoken==0.8.0
 huggingface-hub==0.24.7
